@@ -1259,6 +1259,7 @@ static const NWidgetPart _nested_found_town_widgets[] = {
 										SetDataTip(STR_FOUND_TOWN_RANDOM_TOWN_BUTTON, STR_FOUND_TOWN_RANDOM_TOWN_TOOLTIP), SetPadding(0, 2, 1, 2),
 		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_TF_MANY_RANDOM_TOWNS), SetMinimalSize(156, 12), SetFill(1, 0),
 										SetDataTip(STR_FOUND_TOWN_MANY_RANDOM_TOWNS, STR_FOUND_TOWN_RANDOM_TOWNS_TOOLTIP), SetPadding(0, 2, 1, 2),
+		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_TF_MANY_TOWNS_CMV), SetMinimalSize(156, 12), SetFill(1, 0), // #TODO No data tip here
 		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_TF_EXPAND_ALL_TOWNS), SetMinimalSize(156, 12), SetFill(1, 0),
 										SetDataTip(STR_FOUND_TOWN_EXPAND_ALL_TOWNS, STR_FOUND_TOWN_EXPAND_ALL_TOWNS_TOOLTIP), SetPadding(0, 2, 0, 2),
 		/* Town name selection. */
@@ -1354,7 +1355,7 @@ public:
 	void UpdateButtons(bool check_availability)
 	{
 		if (check_availability && _game_mode != GM_EDITOR) {
-			this->SetWidgetsDisabledState(true, WID_TF_RANDOM_TOWN, WID_TF_MANY_RANDOM_TOWNS, WID_TF_EXPAND_ALL_TOWNS, WID_TF_SIZE_LARGE, WIDGET_LIST_END);
+			this->SetWidgetsDisabledState(true, WID_TF_RANDOM_TOWN, WID_TF_MANY_RANDOM_TOWNS, WID_TF_MANY_TOWNS_CMV, WID_TF_EXPAND_ALL_TOWNS, WID_TF_SIZE_LARGE, WIDGET_LIST_END);
 			this->SetWidgetsDisabledState(_settings_game.economy.found_town != TF_CUSTOM_LAYOUT,
 					WID_TF_LAYOUT_ORIGINAL, WID_TF_LAYOUT_BETTER, WID_TF_LAYOUT_GRID2, WID_TF_LAYOUT_GRID3, WID_TF_LAYOUT_RANDOM, WIDGET_LIST_END);
 			if (_settings_game.economy.found_town != TF_CUSTOM_LAYOUT) town_layout = _settings_game.economy.town_layout;
@@ -1413,6 +1414,17 @@ public:
 				Backup<bool> old_generating_world(_generating_world, true, FILE_LINE);
 				UpdateNearestTownForRoadTiles(true);
 				if (!GenerateTowns(this->town_layout)) {
+					ShowErrorMessage(STR_ERROR_CAN_T_GENERATE_TOWN, STR_ERROR_NO_SPACE_FOR_TOWN, WL_INFO);
+				}
+				UpdateNearestTownForRoadTiles(false);
+				old_generating_world.Restore();
+				break;
+			}
+
+			case WID_TF_MANY_TOWNS_CMV:{
+				Backup<bool> old_generating_world(_generating_world, true, FILE_LINE);
+				UpdateNearestTownForRoadTiles(true);
+				if (!GenerateTownsFromCSV(this->town_layout, "C:\\worldcities.csv")) {
 					ShowErrorMessage(STR_ERROR_CAN_T_GENERATE_TOWN, STR_ERROR_NO_SPACE_FOR_TOWN, WL_INFO);
 				}
 				UpdateNearestTownForRoadTiles(false);

@@ -2592,6 +2592,142 @@ bool GenerateTowns(TownLayout layout)
 	return false;  // we are still without a town? we failed, simply
 }
 
+/*
+* This function will generate towns from an external CSV file that includes data about how the towns should be placed in the world.
+*
+* The external CSV file has the following format:
+* city (unicode city name), city_ascii (ascii city name), lat, lng, country (ascii country name), iso2 (two letter country code), iso3 (three letter country code), admin_name (local unicode name of location), capital (admin or primary), population, id (unique id field)
+*
+* For this function, we only need city_ascii, lat, lang, and population
+* 
+* @param layout which towns will be set to, when created
+* @return true if town have been successfully created
+*/
+bool GenerateTownsFromCSV(TownLayout layout, const char* filename)
+{
+	const uint32 CITY_THRESHOLD = 100000;
+	const uint32 TARGET_SIZE_SCALE = 1000;
+	uint current_number = 0;
+
+	/* Open the file */
+	FILE *file = fopen(filename, "r");
+	uint total = 0;
+
+	struct TownCSVData {
+		std::string name;
+		TileIndex tile;
+		uint32 target_size;
+		bool city;
+	};
+	
+	/* Parse the CSV file for the relevant town data without using strtok */
+	std::vector<TownCSVData> towns;
+	char line[1024];
+	/* Skip the first line of the CSV before parsing */
+	fgets(line, sizeof(line), file);
+	while (fgets(line, sizeof(line), file)) {
+		TownCSVData town;
+		char *ptr = line;
+
+		/* Skip the first field */
+		while (*ptr != ',') {
+			ptr++;
+		}
+		ptr++;
+		ptr++;
+		
+		/* Get the name */
+		while (*ptr != ',') {
+			town.name += *ptr;
+			ptr++;
+		}
+		/* Remove the last character of the name, as it will always be "\" with how it is parsed */
+		town.name.pop_back();
+		ptr++;
+		ptr++;
+
+		/* Get the latitude and longitude and convert it to a tile index on the map. */
+		double lat = atof(ptr);
+		while (*ptr != ',') {
+			ptr++;
+		}
+		ptr++;
+		ptr++;
+		
+		double lng = atof(ptr);
+		while (*ptr != ',') {
+			ptr++;
+		}
+		ptr++;
+		ptr++;
+
+		/* Skip the next five fields */
+		for (int i = 0; i < 5; i++) {
+			while (*ptr != ',') {
+				ptr++;
+			}
+			ptr++;
+			ptr++;
+		}
+
+		/* Get the population */
+		town.target_size = atoi(ptr) / TARGET_SIZE_SCALE;
+
+		/* Convert the latitude and longitude to radians */
+		/* Invert the latitude due to some hackery with the projection */
+		lat *= -M_PI / 180.0;
+		lng *= M_PI / 180.0;
+		
+		/* Convert the radians into cartesian coordinates using a Winkel Tripel projection */
+		double alpha = acos(cos(lat) * cos(lng / 2));
+		double phi_1 = acos(2 / M_PI);
+		double sinc = alpha == 0 ? 1 : sin(alpha) / alpha;
+
+		double x = 256 / M_PI * (lng * cos(phi_1) + 2 * (cos(lat) * sin(lng / 2) / sinc)) / 2 - 128;
+		double y = 256 / M_PI * (lat + (sin(lat) / sinc)) / 2 + 128;
+		
+		x = ScaleByMapSize(x);
+		y = ScaleByMapSize(y);
+		
+		/* Convert the cartesian coordinates into a tile index */
+		/* Use TILE_MASK to throw out things that are out of bounds */
+		town.tile = TILE_MASK(TileXY(x, y));
+
+		/* Add the town to the list */
+		towns.push_back(town);
+		total++;
+
+		if (towns.size() > 10) {
+			break; // #TODO For debugging purposes.
+		}
+	}
+	
+	SetGeneratingWorldProgress(GWP_TOWN, total);
+
+	for (auto town : towns) {
+		bool city = town.target_size > CITY_THRESHOLD;
+		Town* t = new Town(town.tile);
+		DoCreateTown(t, town.tile, 0, TownSize::TSZ_SMALL, city, layout, false);
+		t->name = town.name;
+		/* Iteratively grow town until it hits the target size */
+		//while (t->cache.population < town.target_size) {
+			//GrowTown(t);
+		//}
+	}
+
+	/* Build the town k-d tree again to make sure it's well balanced */
+	RebuildTownKdtree();
+
+	if (current_number != 0) return true;
+	
+	/* If there are no towns at all and we are generating new game, bail out */
+	if (Town::GetNumItems() == 0 && _game_mode != GM_EDITOR) {
+		ShowErrorMessage(STR_ERROR_COULD_NOT_CREATE_TOWN, INVALID_STRING_ID, WL_CRITICAL);
+	}
+
+	return false;  // we are still without a town? we failed, simply
+}
+
 
 /**
  * Returns the bit corresponding to the town zone of the specified tile
