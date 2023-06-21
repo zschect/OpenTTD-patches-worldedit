@@ -2002,6 +2002,10 @@ static bool GrowTown(Town *t)
 			cur_company.Restore();
 			return success;
 		}
+		/* If adding the ptr would cause the tile to go out of bounds, abort the road construction. */
+		if (TileX(tile) + ptr->x < 0 || TileX(tile) + ptr->x > MapMaxX() || TileY(tile) + ptr->y < 0 || TileY(tile) + ptr->y > MapMaxY()) {
+			break;
+		}
 		tile = TILE_ADD(tile, ToTileIndexDiff(*ptr));
 	}
 
@@ -2018,6 +2022,10 @@ static bool GrowTown(Town *t)
 					cur_company.Restore();
 					return true;
 				}
+			}
+			/* If adding the ptr would cause the tile to go out of bounds, abort the road construction. */
+			if (TileX(tile) + ptr->x < 0 || TileX(tile) + ptr->x > MapMaxX() || TileY(tile) + ptr->y < 0 || TileY(tile) + ptr->y > MapMaxY()) {
+				break;
 			}
 			tile = TILE_ADD(tile, ToTileIndexDiff(*ptr));
 		}
@@ -2469,6 +2477,17 @@ static bool FindNearestEmptyLand(TileIndex tile, void *user_data)
 }
 
 /**
+* CircularTileSearch callback; finds the nearest FLAT land tile
+*
+* @param tile Start looking from this tile
+* @param user_data not used
+*/
+static bool FindNearestEmptyFlatLand(TileIndex tile, void *user_data)
+{
+	return IsTileType(tile, MP_CLEAR) && !IsTileFlat(tile);
+}
+
+/**
  * Given a spot on the map (presumed to be a water tile), find a good
  * coastal spot to build a city. We don't want to build too close to
  * the edge if we can help it (since that retards city growth) hence
@@ -2605,9 +2624,8 @@ bool GenerateTowns(TownLayout layout)
 */
 bool GenerateTownsFromCSV(TownLayout layout, const char* filename)
 {
-	const uint32 CITY_THRESHOLD = 100000;
 	const uint32 TARGET_SIZE_SCALE = 1000;
-	uint current_number = 0;
+	const uint32 CITY_THRESHOLD = 1000000 / TARGET_SIZE_SCALE;
 
 	/* Open the file */
 	FILE *file = fopen(filename, "r");
@@ -2617,9 +2635,9 @@ bool GenerateTownsFromCSV(TownLayout layout, const char* filename)
 		std::string name;
 		TileIndex tile;
 		uint32 target_size;
-		bool city;
 	};
-	
+
+	printf("Maximum Map X and Y: %i, %i", MapSizeX(), MapSizeY());
 	/* Parse the CSV file for the relevant town data without using strtok */
 	std::vector<TownCSVData> towns;
 	char line[1024];
@@ -2634,16 +2652,12 @@ bool GenerateTownsFromCSV(TownLayout layout, const char* filename)
 			ptr++;
 		}
 		ptr++;
-		ptr++;
 		
 		/* Get the name */
 		while (*ptr != ',') {
 			town.name += *ptr;
 			ptr++;
 		}
-		/* Remove the last character of the name, as it will always be "\" with how it is parsed */
-		town.name.pop_back();
-		ptr++;
 		ptr++;
 
 		/* Get the latitude and longitude and convert it to a tile index on the map. */
@@ -2652,13 +2666,11 @@ bool GenerateTownsFromCSV(TownLayout layout, const char* filename)
 			ptr++;
 		}
 		ptr++;
-		ptr++;
 		
 		double lng = atof(ptr);
 		while (*ptr != ',') {
 			ptr++;
 		}
-		ptr++;
 		ptr++;
 
 		/* Skip the next five fields */
@@ -2667,52 +2679,108 @@ bool GenerateTownsFromCSV(TownLayout layout, const char* filename)
 				ptr++;
 			}
 			ptr++;
-			ptr++;
 		}
 
 		/* Get the population */
 		town.target_size = atoi(ptr) / TARGET_SIZE_SCALE;
 
+		/* If the population is too small, ignore this town */
+		if (town.target_size < 100) {
+			continue;
+		}
+
+		if (lng > 0) {
+			// Correction factor that falls off as lng becomes > 60
+			lng *= std::min(1.0, 1.0 - ((60.0 - lng) / 60.0) * 0.04);
+		}
+
+		if (lng < 0) {
+			// Correction factor that falls off as lng becomes < -100
+			lng *= std::max(1.0, 1.0 + ((lng + 100) / 100.0) * 0.05);
+		}
+
+		if (lat < -25) {
+			// Correction factor for low latitude
+			lat *= 1.0 + ((lat + 25) / 25.f * 0.05);
+		}
+
 		/* Convert the latitude and longitude to radians */
 		/* Invert the latitude due to some hackery with the projection */
 		lat *= -M_PI / 180.0;
-		lng *= M_PI / 180.0;
+		lng *= -M_PI / 180.0;
 		
 		/* Convert the radians into cartesian coordinates using a Winkel Tripel projection */
 		double alpha = acos(cos(lat) * cos(lng / 2));
 		double phi_1 = acos(2 / M_PI);
 		double sinc = alpha == 0 ? 1 : sin(alpha) / alpha;
 
-		double x = 256 / M_PI * (lng * cos(phi_1) + 2 * (cos(lat) * sin(lng / 2) / sinc)) / 2 - 128;
-		double y = 256 / M_PI * (lat + (sin(lat) / sinc)) / 2 + 128;
-		
-		x = ScaleByMapSize(x);
-		y = ScaleByMapSize(y);
+		/* Get a real map size for the purposes of our projection, as the map we are using has some padding. */
+		uint real_size_x = MapSizeX() * 0.625; /// 1.3;
+		uint real_size_y = MapSizeY() * 1.265; /// 1.1;
+
+		double x = real_size_x / M_PI * (lng * cos(phi_1) + 2 * (cos(lat) * sin(lng / 2) / sinc)) / 2 + MapSizeX() / 2 + (6.0f / 256.f) * MapSizeX();
+		double y = real_size_y / M_PI * (lat + (sin(lat) / sinc)) / 2 + MapSizeY() / 2 + (23.f / 256.f) * MapSizeY();
+
+		/* Throw out this town if the x or y coordinate is out of bounds */
+		if (x < 0 || x > MapMaxX() || y < 0 || y > MapMaxY()) {
+			continue;
+		}
 		
 		/* Convert the cartesian coordinates into a tile index */
 		/* Use TILE_MASK to throw out things that are out of bounds */
-		town.tile = TILE_MASK(TileXY(x, y));
+		town.tile = TileXY(x, y);
 
 		/* Add the town to the list */
 		towns.push_back(town);
 		total++;
-
-		if (towns.size() > 10) {
-			break; // #TODO For debugging purposes.
-		}
 	}
+
+	/* Sort the towns by population in descending order */
+	std::sort(towns.begin(), towns.end(), [](const TownCSVData &a, const TownCSVData &b) {
+		return a.target_size > b.target_size;
+	});
 	
 	SetGeneratingWorldProgress(GWP_TOWN, total);
 
-	for (auto town : towns) {
+	uint32 current_number = 0;
+	for (auto &town : towns) {
 		bool city = town.target_size > CITY_THRESHOLD;
+		/* Check if the town can be placed here */
+		auto canplace = TownCanBePlacedHere(town.tile, city);
+		/* We should try a few neighboring tiles first before giving up. */
+		if (canplace.Failed()) {
+			/* if we tried to place the town on water, slide it over onto
+			* the nearest likely-looking spot */
+			if (IsTileType(town.tile, MP_WATER)) {
+				town.tile = FindNearestGoodCoastalTownSpot(town.tile, layout);
+				if (town.tile == INVALID_TILE) {
+				/* Try the neighboring tiles */
+					CircularTileSearch(&town.tile, 20, FindNearestEmptyFlatLand, nullptr);
+					canplace = TownCanBePlacedHere(town.tile, city);
+					if (canplace.Failed()) {
+						/* If we still can't find a suitable location, give up on this town */
+						continue;
+					}
+				}
+			}
+			else {
+				/* Try the neighboring tiles */
+				CircularTileSearch(&town.tile, 20, FindNearestEmptyFlatLand, nullptr);
+				canplace = TownCanBePlacedHere(town.tile, city);
+				if (canplace.Failed()) {
+					/* If we still can't find a suitable location, give up on this town */
+					continue;
+				}
+			}
+		}
 		Town* t = new Town(town.tile);
 		DoCreateTown(t, town.tile, 0, TownSize::TSZ_SMALL, city, layout, false);
+		current_number++;
 		t->name = town.name;
-		/* Iteratively grow town until it hits the target size */
-		//while (t->cache.population < town.target_size) {
-			//GrowTown(t);
-		//}
+		/* Getting the actual population of a town requires a lot of extra work, so instead we just call GrowTown a number of times based off of the target population and hope it nears that target. */
+		for (int i = 0; i < town.target_size / 50; i++) {
+			GrowTown(t);
+		}
 	}
 
 	/* Build the town k-d tree again to make sure it's well balanced */
