@@ -2364,6 +2364,18 @@ static uint GetNumberOfIndustries()
 	return std::min<uint>(IndustryPool::MAX_SIZE, ScaleByMapSize(numof_industry_table[difficulty]));
 }
 
+
+/**
+* CircularTileSearch callback; finds the nearest house
+*
+* @param tile Start looking from this tile
+* @param user_data not used
+*/
+static bool FindNearestHouse(TileIndex tile, void *user_data)
+{
+	return IsTileType(tile, MP_HOUSE);
+}
+
 /**
  * Try to place the industry in the game.
  * Since there is no feedback why placement fails, there is no other option
@@ -2376,7 +2388,13 @@ static Industry *PlaceIndustry(IndustryType type, IndustryAvailabilityCallType c
 {
 	uint tries = try_hard ? 10000u : 2000u;
 	for (; tries > 0; tries--) {
-		Industry *ind = CreateNewIndustry(RandomTile(), type, creation_type);
+		TileIndex tile = RandomTile();
+		TileIndex temp = tile;
+		Industry *ind;
+		/* Only place an industry if it is somewhat near a house tile. */
+		if (CircularTileSearch(&temp, 200, FindNearestHouse, nullptr)) {
+			ind = CreateNewIndustry(tile, type, creation_type);
+		}
 		if (ind != nullptr) return ind;
 	}
 	return nullptr;
